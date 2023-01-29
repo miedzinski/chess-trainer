@@ -45,25 +45,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::puzzle::puzzle_repository::InMemoryPuzzleRepository;
+    use crate::puzzle::puzzle_repository::{InMemoryPuzzleRepository, PuzzleRepository};
     use crate::puzzle::service::PuzzleServiceImpl;
-    use crate::puzzle::{Puzzle, PuzzleService};
+    use crate::puzzle::PuzzleService;
 
-    fn make_service() -> PuzzleServiceImpl<P> {
+    fn make_service<P>() -> impl PuzzleService
+    where
+        P: PuzzleRepository + Send + Sync,
+    {
         let puzzle_repository = InMemoryPuzzleRepository::new();
-        PuzzleServiceImpl { puzzle_repository }
-    }
-
-    fn sample_puzzle() -> Puzzle {
-        Puzzle::new("3R4/8/K7/pB2b3/1p6/1P2k3/3p4/8 w - - 4 58".to_string()).unwrap()
-    }
-
-    #[test]
-    fn xxx() {
-        let mut service = make_service();
-
-        service.add_puzzle(sample_puzzle());
-
-        let puzzles = service.list_puzzles();
+        PuzzleServiceImpl::new(puzzle_repository)
     }
 }
