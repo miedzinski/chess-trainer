@@ -17,10 +17,13 @@ fn main() -> anyhow::Result<()> {
     let count = reader
         .deserialize()
         .map(|record: Result<LichessPuzzleImport, _>| puzzle_service.import_puzzle(record?))
+        .inspect(|result| if let Err(error) = result {
+            eprintln!("{}", error)
+        })
         .filter(Result::is_ok)
         .count();
 
-    println!("imported {} puzzles", count);
+    println!("imported {} puzzles.", count);
 
     Ok(())
 }
