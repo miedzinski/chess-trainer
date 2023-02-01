@@ -3,6 +3,8 @@ use anyhow::ensure;
 use crate::puzzle::consts::{MAX_SET_NAME_LENGTH, MAX_SET_SIZE, MIN_SET_SIZE};
 use crate::puzzle::errors::CreateTrainingSetError;
 use crate::puzzle::puzzle_repository::PuzzleRepository;
+use crate::puzzle::training_set_repository;
+use crate::puzzle::training_set_repository::TrainingSetRepository;
 use crate::puzzle::types::{CreateTrainingSetOptions, LichessPuzzleImport, Puzzle, TrainingSet};
 
 pub trait PuzzleService {
@@ -14,25 +16,34 @@ pub trait PuzzleService {
     ) -> Result<TrainingSet, CreateTrainingSetError>;
 }
 
-pub struct PuzzleServiceImpl<P>
+#[cfg_attr(test, derive(derive_builder::Builder))]
+#[cfg_attr(test, builder(pattern = "owned"))]
+pub struct PuzzleServiceImpl<P, T>
 where
-    P: PuzzleRepository + Send + Sync,
+    P: PuzzleRepository,
+    T: TrainingSetRepository,
 {
     puzzle_repository: P,
+    training_set_repository: T,
 }
 
-impl<P> PuzzleServiceImpl<P>
+impl<P, T> PuzzleServiceImpl<P, T>
 where
-    P: PuzzleRepository + Send + Sync,
+    P: PuzzleRepository,
+    T: TrainingSetRepository,
 {
-    pub fn new(puzzle_repository: P) -> PuzzleServiceImpl<P> {
-        PuzzleServiceImpl { puzzle_repository }
+    pub fn new(puzzle_repository: P, training_set_repository: T) -> PuzzleServiceImpl<P, T> {
+        PuzzleServiceImpl {
+            puzzle_repository,
+            training_set_repository,
+        }
     }
 }
 
-impl<P> PuzzleService for PuzzleServiceImpl<P>
+impl<P, T> PuzzleService for PuzzleServiceImpl<P, T>
 where
-    P: PuzzleRepository + Send + Sync,
+    P: PuzzleRepository,
+    T: TrainingSetRepository,
 {
     fn import_puzzle(&self, lichess_puzzle: LichessPuzzleImport) -> anyhow::Result<Puzzle> {
         ensure!(
@@ -75,7 +86,8 @@ where
         }
 
         let puzzle_ids = puzzles.iter().map(|puzzle| puzzle.id).collect();
-        let set = TrainingSet {
+
+        let create_set = training_set_repository::CreateTrainingSet {
             puzzle_ids,
             name: options.name,
             rating: options.rating,
@@ -83,7 +95,9 @@ where
             current_progress: 0,
             cycles_done: 0,
         };
-        Ok(set)
+        self.training_set_repository
+            .create(create_set)
+            .map_err(|source| CreateTrainingSetError::RepositoryError { source })
     }
 }
 
@@ -92,13 +106,15 @@ mod tests {
     use std::iter::repeat_with;
 
     use parking_lot::Mutex;
+    use uuid::uuid;
 
     use crate::puzzle::errors::CreateTrainingSetError;
     use crate::puzzle::puzzle_repository::MockPuzzleRepository;
-    use crate::puzzle::service::PuzzleServiceImpl;
+    use crate::puzzle::service::PuzzleServiceImplBuilder;
+    use crate::puzzle::training_set_repository::MockTrainingSetRepository;
     use crate::puzzle::types::{
         CreateTrainingSetOptions, CreateTrainingSetOptionsBuilder, LichessPuzzleImportBuilder,
-        Puzzle, PuzzleBuilder, PuzzleId, Theme, ThemeChoice, TrainingSet,
+        Puzzle, PuzzleBuilder, PuzzleId, Theme, ThemeChoice, TrainingSet, TrainingSetId,
     };
     use crate::puzzle::PuzzleService;
 
@@ -143,7 +159,17 @@ mod tests {
         builder
     }
 
-    fn repository_creates(puzzle_repository: &mut MockPuzzleRepository) {
+    fn sample_training_set_id() -> TrainingSetId {
+        uuid!("e649d0cc-3244-483d-922a-e8269d006ffe")
+    }
+
+    fn make_service() -> PuzzleServiceImplBuilder<MockPuzzleRepository, MockTrainingSetRepository> {
+        PuzzleServiceImplBuilder::default()
+            .puzzle_repository(MockPuzzleRepository::new())
+            .training_set_repository(MockTrainingSetRepository::new())
+    }
+
+    fn stub_puzzle_repository_creates(puzzle_repository: &mut MockPuzzleRepository) {
         puzzle_repository.expect_create().returning(|puzzle| {
             static COUNTER_MUTEX: Mutex<usize> = Mutex::new(0);
             let mut guard = COUNTER_MUTEX.lock();
@@ -164,7 +190,7 @@ mod tests {
         });
     }
 
-    fn repository_finds_random(
+    fn stub_puzzle_repository_finds_random(
         puzzle_repository: &mut MockPuzzleRepository,
         size_limit: Option<usize>,
     ) {
@@ -178,6 +204,22 @@ mod tests {
             });
     }
 
+    fn stub_set_repository_creates(training_set_repository: &mut MockTrainingSetRepository) {
+        training_set_repository
+            .expect_create()
+            .returning_st(move |set| {
+                Ok(TrainingSet {
+                    id: sample_training_set_id(),
+                    puzzle_ids: set.puzzle_ids,
+                    name: set.name,
+                    rating: set.rating,
+                    themes: set.themes,
+                    current_progress: set.current_progress,
+                    cycles_done: set.cycles_done,
+                })
+            });
+    }
+
     #[test]
     fn should_import_lichess_puzzle() {
         // given Lichess puzzle:
@@ -185,10 +227,13 @@ mod tests {
 
         // and repository that saves puzzles:
         let mut puzzle_repository = MockPuzzleRepository::new();
-        repository_creates(&mut puzzle_repository);
+        stub_puzzle_repository_creates(&mut puzzle_repository);
 
         // when Lichess puzzle is imported:
-        let service = PuzzleServiceImpl::new(puzzle_repository);
+        let service = make_service()
+            .puzzle_repository(puzzle_repository)
+            .build()
+            .unwrap();
         let imported_puzzle = service.import_puzzle(lichess_puzzle).unwrap();
 
         // then it has correct data:
@@ -211,14 +256,23 @@ mod tests {
 
         // and repository that finds random puzzles:
         let mut puzzle_repository = MockPuzzleRepository::new();
-        repository_finds_random(&mut puzzle_repository, None);
+        stub_puzzle_repository_finds_random(&mut puzzle_repository, None);
+
+        // and repository that creates sets:
+        let mut training_set_repository = MockTrainingSetRepository::default();
+        stub_set_repository_creates(&mut training_set_repository);
 
         // when set is created:
-        let service = PuzzleServiceImpl::new(puzzle_repository);
+        let service = make_service()
+            .puzzle_repository(puzzle_repository)
+            .training_set_repository(training_set_repository)
+            .build()
+            .unwrap();
         let set = service.create_set(options.clone()).unwrap();
 
         // then it has correct data:
         let expected = TrainingSet {
+            id: sample_training_set_id(),
             puzzle_ids: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
             name: name.to_string(),
             rating: options.rating,
@@ -237,11 +291,8 @@ mod tests {
             .build()
             .unwrap();
 
-        // and repository:
-        let puzzle_repository = MockPuzzleRepository::default();
-
         // when set is created:
-        let service = PuzzleServiceImpl::new(puzzle_repository);
+        let service = make_service().build().unwrap();
         let create_set_result = service.create_set(options);
 
         // then error is returned:
@@ -260,11 +311,8 @@ mod tests {
             .build()
             .unwrap();
 
-        // and repository:
-        let puzzle_repository = MockPuzzleRepository::default();
-
         // when set is created:
-        let service = PuzzleServiceImpl::new(puzzle_repository);
+        let service = make_service().build().unwrap();
         let create_set_result = service.create_set(options);
 
         // then error is returned:
@@ -282,11 +330,8 @@ mod tests {
             .build()
             .unwrap();
 
-        // and repository:
-        let puzzle_repository = MockPuzzleRepository::default();
-
         // when set is created:
-        let service = PuzzleServiceImpl::new(puzzle_repository);
+        let service = make_service().build().unwrap();
         let create_set_result = service.create_set(options);
 
         // then error is returned:
@@ -304,11 +349,8 @@ mod tests {
             .build()
             .unwrap();
 
-        // and repository:
-        let puzzle_repository = MockPuzzleRepository::default();
-
         // when set is created:
-        let service = PuzzleServiceImpl::new(puzzle_repository);
+        let service = make_service().build().unwrap();
         let create_set_result = service.create_set(options);
 
         // then error is returned:
@@ -329,10 +371,13 @@ mod tests {
 
         // and repository that finds less than requested puzzles:
         let mut puzzle_repository = MockPuzzleRepository::default();
-        repository_finds_random(&mut puzzle_repository, Some(10));
+        stub_puzzle_repository_finds_random(&mut puzzle_repository, Some(10));
 
         // when set is created:
-        let service = PuzzleServiceImpl::new(puzzle_repository);
+        let service = make_service()
+            .puzzle_repository(puzzle_repository)
+            .build()
+            .unwrap();
         let create_set_result = service.create_set(options);
 
         // then error is returned:

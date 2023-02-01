@@ -5,6 +5,7 @@ use serde_with::formats::SpaceSeparator;
 use serde_with::serde_as;
 use serde_with::StringWithSeparator;
 use strum::{Display as EnumDisplay, EnumString};
+use uuid::Uuid;
 
 use crate::puzzle::puzzle_repository::CreatePuzzle;
 
@@ -134,8 +135,11 @@ impl From<LichessPuzzleImport> for CreatePuzzle {
     }
 }
 
+pub type TrainingSetId = Uuid;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrainingSet {
+    pub id: TrainingSetId,
     pub puzzle_ids: Vec<PuzzleId>,
     pub name: String,
     pub rating: RangeInclusive<u16>,
