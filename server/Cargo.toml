@@ -13,6 +13,7 @@ csv = "1.1"
 serde_with = "2.2.0"
 strum = { version = "0.24.1", features = ["derive"] }
 parking_lot = "0.12.1"
+thiserror = "1.0.38"
 
 [dev-dependencies]
 derive_builder = "0.12.0"

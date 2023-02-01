@@ -1,16 +1,17 @@
-use anyhow::{ensure, Result};
+use anyhow::ensure;
 
+use crate::puzzle::consts::{MAX_SET_NAME_LENGTH, MAX_SET_SIZE, MIN_SET_SIZE};
+use crate::puzzle::errors::CreateTrainingSetError;
 use crate::puzzle::puzzle_repository::PuzzleRepository;
 use crate::puzzle::types::{CreateTrainingSetOptions, LichessPuzzleImport, Puzzle, TrainingSet};
 
-const MAX_SET_NAME_LENGTH: usize = 100;
-const MIN_SET_SIZE: usize = 5;
-const MAX_SET_SIZE: usize = 1000;
-
 pub trait PuzzleService {
-    fn import_puzzle(&self, lichess_puzzle: LichessPuzzleImport) -> Result<Puzzle>;
+    fn import_puzzle(&self, lichess_puzzle: LichessPuzzleImport) -> anyhow::Result<Puzzle>;
     fn list_puzzles(&self) -> Vec<Puzzle>;
-    fn create_set(&self, options: CreateTrainingSetOptions) -> anyhow::Result<TrainingSet>;
+    fn create_set(
+        &self,
+        options: CreateTrainingSetOptions,
+    ) -> Result<TrainingSet, CreateTrainingSetError>;
 }
 
 pub struct PuzzleServiceImpl<P>
@@ -33,7 +34,7 @@ impl<P> PuzzleService for PuzzleServiceImpl<P>
 where
     P: PuzzleRepository + Send + Sync,
 {
-    fn import_puzzle(&self, lichess_puzzle: LichessPuzzleImport) -> Result<Puzzle> {
+    fn import_puzzle(&self, lichess_puzzle: LichessPuzzleImport) -> anyhow::Result<Puzzle> {
         ensure!(
             (-100..=100).contains(&lichess_puzzle.popularity),
             "puzzle {}: popularity {} is out of range [-100, 100].",
@@ -47,31 +48,31 @@ where
         self.puzzle_repository.find()
     }
 
-    fn create_set(&self, options: CreateTrainingSetOptions) -> anyhow::Result<TrainingSet> {
-        ensure!(
-            options.name.len() <= MAX_SET_NAME_LENGTH,
-            "Set name length can't exceed {}.",
-            MAX_SET_NAME_LENGTH
-        );
-        ensure!(
-            options.size >= MIN_SET_SIZE,
-            "Set size must be at least {}.",
-            MIN_SET_SIZE
-        );
-        ensure!(
-            options.size <= MAX_SET_SIZE,
-            "Set size can't exceed {}.",
-            MAX_SET_SIZE
-        );
+    fn create_set(
+        &self,
+        options: CreateTrainingSetOptions,
+    ) -> Result<TrainingSet, CreateTrainingSetError> {
+        if options.name.is_empty() {
+            return Err(CreateTrainingSetError::EmptyName);
+        }
+        if options.name.len() > MAX_SET_NAME_LENGTH {
+            return Err(CreateTrainingSetError::NameLengthLimitExceeded);
+        }
+        if options.size < MIN_SET_SIZE {
+            return Err(CreateTrainingSetError::SizeTooSmall);
+        }
+        if options.size > MAX_SET_SIZE {
+            return Err(CreateTrainingSetError::SizeLimitExceeded);
+        }
 
-        let puzzles =
-            self.puzzle_repository
-                .find_random(options.size, &options.rating, &options.themes)?;
+        let puzzles = self
+            .puzzle_repository
+            .find_random(options.size, &options.rating, &options.themes)
+            .map_err(|source| CreateTrainingSetError::RepositoryError { source })?;
 
-        ensure!(
-            puzzles.len() == options.size,
-            "Not enough puzzles meet the criteria given."
-        );
+        if puzzles.len() != options.size {
+            return Err(CreateTrainingSetError::CriteriaUnmet);
+        }
 
         let puzzle_ids = puzzles.iter().map(|puzzle| puzzle.id).collect();
         let set = TrainingSet {
@@ -92,6 +93,7 @@ mod tests {
 
     use parking_lot::Mutex;
 
+    use crate::puzzle::errors::CreateTrainingSetError;
     use crate::puzzle::puzzle_repository::MockPuzzleRepository;
     use crate::puzzle::service::PuzzleServiceImpl;
     use crate::puzzle::types::{
@@ -228,6 +230,28 @@ mod tests {
     }
 
     #[test]
+    fn should_disallow_creating_sets_with_name_empty() {
+        // given too long name:
+        let options = sample_create_training_set_options()
+            .name("".to_string())
+            .build()
+            .unwrap();
+
+        // and repository:
+        let puzzle_repository = MockPuzzleRepository::default();
+
+        // when set is created:
+        let service = PuzzleServiceImpl::new(puzzle_repository);
+        let create_set_result = service.create_set(options);
+
+        // then error is returned:
+        assert!(matches!(
+            create_set_result,
+            Err(CreateTrainingSetError::EmptyName)
+        ));
+    }
+
+    #[test]
     fn should_disallow_creating_sets_with_name_too_long() {
         // given too long name:
         let name: String = repeat_with(|| "a").take(101).collect();
@@ -244,7 +268,10 @@ mod tests {
         let create_set_result = service.create_set(options);
 
         // then error is returned:
-        assert!(create_set_result.is_err())
+        assert!(matches!(
+            create_set_result,
+            Err(CreateTrainingSetError::NameLengthLimitExceeded)
+        ));
     }
 
     #[test]
@@ -263,7 +290,10 @@ mod tests {
         let create_set_result = service.create_set(options);
 
         // then error is returned:
-        assert!(create_set_result.is_err())
+        assert!(matches!(
+            create_set_result,
+            Err(CreateTrainingSetError::SizeTooSmall)
+        ));
     }
 
     #[test]
@@ -282,7 +312,10 @@ mod tests {
         let create_set_result = service.create_set(options);
 
         // then error is returned:
-        assert!(create_set_result.is_err())
+        assert!(matches!(
+            create_set_result,
+            Err(CreateTrainingSetError::SizeLimitExceeded)
+        ));
     }
 
     #[test]
@@ -303,6 +336,9 @@ mod tests {
         let create_set_result = service.create_set(options);
 
         // then error is returned:
-        assert!(create_set_result.is_err())
+        assert!(matches!(
+            create_set_result,
+            Err(CreateTrainingSetError::CriteriaUnmet)
+        ));
     }
 }
