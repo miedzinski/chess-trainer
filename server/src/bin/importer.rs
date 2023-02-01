@@ -12,13 +12,15 @@ fn main() -> anyhow::Result<()> {
         .has_headers(false)
         .flexible(true)
         .from_path(path)?;
-    let mut puzzle_service = make_service();
+    let puzzle_service = make_service();
 
     let count = reader
         .deserialize()
         .map(|record: Result<LichessPuzzleImport, _>| puzzle_service.import_puzzle(record?))
-        .inspect(|result| if let Err(error) = result {
-            eprintln!("{}", error)
+        .inspect(|result| {
+            if let Err(error) = result {
+                eprintln!("{}", error)
+            }
         })
         .filter(Result::is_ok)
         .count();

@@ -1,3 +1,5 @@
+use std::ops::RangeInclusive;
+
 use serde::{Deserialize, Serialize};
 use serde_with::formats::SpaceSeparator;
 use serde_with::serde_as;
@@ -8,7 +10,8 @@ use crate::puzzle::puzzle_repository::CreatePuzzle;
 
 pub type PuzzleId = u64;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(derive_builder::Builder))]
 pub struct Puzzle {
     pub id: PuzzleId,
     pub fen: String,
@@ -22,7 +25,7 @@ pub struct Puzzle {
     pub lichess_game_url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, EnumDisplay, EnumString)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, EnumDisplay, EnumString)]
 #[serde(rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum Theme {
@@ -90,9 +93,16 @@ pub enum Theme {
     Zugzwang,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemeChoice {
+    Themes(Vec<Theme>),
+    HealthyMix,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+#[cfg_attr(test, derive(derive_builder::Builder))]
 pub struct LichessPuzzleImport {
     pub puzzle_id: String,
     #[serde(rename = "FEN")]
@@ -122,4 +132,23 @@ impl From<LichessPuzzleImport> for CreatePuzzle {
             lichess_game_url: value.game_url,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrainingSet {
+    pub puzzle_ids: Vec<PuzzleId>,
+    pub name: String,
+    pub rating: RangeInclusive<u16>,
+    pub themes: ThemeChoice,
+    pub current_progress: u32,
+    pub cycles_done: u32,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(derive_builder::Builder))]
+pub struct CreateTrainingSetOptions {
+    pub name: String,
+    pub size: usize,
+    pub rating: RangeInclusive<u16>,
+    pub themes: ThemeChoice,
 }
