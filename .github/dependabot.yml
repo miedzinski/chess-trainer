@@ -2,4 +2,5 @@ version: 2
 updates:
   - package-ecosystem: cargo
     directory: /server
-    schedule.interval: daily
+    schedule:
+      interval: daily
